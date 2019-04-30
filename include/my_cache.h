@@ -269,7 +269,7 @@ private:
         return node;
     }
     bool InitResource() {
-        nodes_array_ = new Node[max_size_];
+        nodes_array_ = new Node[max_size_ + 1]; //保证当前至少有一个可用
         free_node_head_ = nodes_array_ + 0;
         Node * t = free_node_head_;
         for(int i = 0; i < max_size_; ++i){
