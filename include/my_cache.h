@@ -1,7 +1,7 @@
 #ifndef _MY_CACHE_H_
 #define _MY_CACHE_H_
 
-#define DEBUG_LXH_CACHE
+//#define DEBUG_LXH_CACHE
 #ifdef DEBUG_LXH_CACHE
 #define PRINTF printf
 #else
@@ -18,10 +18,6 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
-
-#ifndef u32
-#define u32 unsigned int
-#endif
 
 namespace lxh {
 namespace cache {
@@ -76,44 +72,28 @@ public:
     typedef std::function<void()> ExpireCallbackFun;
     using map_type = std::unordered_map<Key, Node*>;
 public:
-    MyCache(const int max_size) : hashmap_(max_size * 2) {
-        assert(max_size > 1);
-        max_size_ = max_size;
-    }
-    MyCache &with_hit_count() {
-        if(run_status_ == RunStatus::ORIG) with_hit_count_ = true;
-        return *this;
-    }
-    MyCache &with_expire_time(const long expire_time, ExpireCallbackFun * expire_callback_fun = NULL, const int batch_size = 10) {
+    MyCache(const int max_size, const long expire_time = 0, ExpireCallbackFun * expire_callback_fun = NULL, const int batch_size = 10) : 
+            hashmap_(max_size * 2), 
+            max_size_(max_size), 
+            with_hit_count_(true), 
+            expire_time_(expire_time), 
+            expire_callback_fun_(expire_callback_fun), 
+            max_callback_batch_size_(batch_size) {
         if(run_status_ == RunStatus::ORIG && expire_time > 0) {
             with_expire_time_ = true;
-            expire_time_ = expire_time;
-            expire_callback_fun_ = expire_callback_fun;
-            max_callback_batch_size_ = batch_size;
             LRUCacheTimeThread::GetInstance();
             if(expire_callback_fun) {
                 std::thread th(&MyCache::ExpireCheck, this);
                 th.detach();
             }
         }
-        return *this;
+        Start();
     }
-    bool Start() {
-        if(run_status_ != RunStatus::ORIG) return false;
-        run_status_ = RunStatus::INIT;
-        bool ret = InitResource();
-        if(ret) {
-            run_status_ = RunStatus::RUNNING;
-        } else {
-            run_status_ = RunStatus::ERROR;
-        }
-        return ret;
-    };
     void Put(Key key, Value value) {
         std::lock_guard<std::mutex> lock(mutex_);
         DoPut(key, value);
     }
-    std::pair<Value, bool> Get(Key key) {
+    std::pair<Value, bool> Get(const Key key) {
         std::lock_guard<std::mutex> lock(mutex_);
         return DoGet(key);
     }
@@ -128,6 +108,17 @@ public:
         DoDebug();
     }
 private:
+    bool Start() {
+        if(run_status_ != RunStatus::ORIG) return false;
+        run_status_ = RunStatus::INIT;
+        bool ret = InitResource();
+        if(ret) {
+            run_status_ = RunStatus::RUNNING;
+        } else {
+            run_status_ = RunStatus::ERROR;
+        }
+        return ret;
+    };
     void DoDebug() {
 #ifdef DEBUG_LXH_CACHE
         std::lock_guard<std::mutex> lock(mutex_);
@@ -149,7 +140,8 @@ private:
         std::cout << std::endl;
 #endif
     }
-    std::pair<Value, bool> DoGet(Key key) {
+    std::pair<Value, bool> DoGet(const Key key) {
+        PRINTF("in DoGet\n");
         static const Value const_v;
         auto it = hashmap_.find(key);
         if (it == hashmap_.end()) {
@@ -174,6 +166,7 @@ private:
         return std::pair<Value, bool>(node->data, true);
     }
     void DoPut(Key key, Value value) {
+        PRINTF("in DoPut\n");
         Node* new_node = NewNode(value);
         auto it = hashmap_.insert(typename map_type::value_type(key, new_node));
         if (!it.second) { //已经存在
@@ -246,7 +239,7 @@ private:
             free_node_head_ = node;
         }
     }
-    Node * NewNode(Key key) {
+    Node * NewNode(Value value) {
         const long cur_time = LRUCacheTimeThread::GetInstance().GetCurSecond();
         long expire_time = cur_time + expire_time_;
         Node * node = NULL;
@@ -259,13 +252,13 @@ private:
                 free_node_tail_ = NULL;
             }
 #ifdef DEBUG_LXH_CACHE
-            std::cout << "NewNode: free list is empty: key: " << key << std::endl;
+            std::cout << "NewNode: free list is empty: value: " << std::endl;
 #endif
         } else {
             node = free_node_head_;
             free_node_head_ = free_node_head_->next;
         }
-        node->Init(key, expire_time);
+        node->Init(value, expire_time);
         return node;
     }
     bool InitResource() {
@@ -299,13 +292,13 @@ public:
     class Node {
     public:
         Value data;
-        u32 hit_count = 0;
-        u32 ts = 0; //过期时间;   //drop: LRU: 最近更新时间; FIFO: 插入时间
+        unsigned int hit_count = 0;
+        unsigned int ts = 0; //过期时间;   //drop: LRU: 最近更新时间; FIFO: 插入时间
         Node * prev = NULL;
         Node * next = NULL;
         typename map_type::iterator map_it;
     public:
-        void Init(Value d, u32 t = 0l) {
+        void Init(Value d, unsigned int t = 0) {
             data = d;
             hit_count = 0;
             prev = NULL;
